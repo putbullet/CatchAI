@@ -94,9 +94,13 @@ class CatchTray(QObject):
         """Surface a completed backend cycle through the tray notification."""
         assistant_result = result.get("result", {}).get("assistant", {})
         message = assistant_result.get("message")
+        tool_result = assistant_result.get("tool_result", {})
+        image_path = tool_result.get("image_path")
         if message:
             self.floating.set_message(message)
             self.tray.showMessage("Catch", message, QSystemTrayIcon.Information, 5000)
+        if image_path:
+            self.floating.show_image(image_path)
 
     def _show_assistant_text(self, text: str) -> None:
         """Keep the completed response visible when the worker returns to idle."""
@@ -119,7 +123,8 @@ class CatchTray(QObject):
         elif state == CatchState.RESPONDING.value:
             self.floating.set_message("Preparing a response...")
         elif state == CatchState.ERROR.value:
-            self.floating.set_message("Something went wrong.")
+            if not self._response_visible:
+                self.floating.set_message("Something went wrong.")
 
     def _show_error(self, message: str) -> None:
         """Show a concise backend error without exposing a traceback in the UI."""

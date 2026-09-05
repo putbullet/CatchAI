@@ -63,7 +63,12 @@ def test_play_song_never_falls_back_to_application_lookup() -> None:
     assert result["tool_result"]["message"] == "Playing The Days by Chrystal"
 
 
-def test_spotify_number_selection_is_kept_for_follow_up() -> None:
+def test_spotify_number_selection_is_kept_for_follow_up(monkeypatch) -> None:
+    class FakeProvider:
+        def play(self, track):
+            return {"success": True, "track": track, "message": f"Playing {track['name']}"}
+
+    monkeypatch.setattr("tools.spotify._provider", lambda: FakeProvider())
     registry = ToolRegistry()
     registry.register(
         ToolDefinition(
@@ -79,8 +84,8 @@ def test_spotify_number_selection_is_kept_for_follow_up() -> None:
         registry,
     )
     assistant.pending_spotify_selection = [
-        {"name": "First Song"},
-        {"name": "Second Song"},
+        {"uri": "spotify:track:first", "name": "First Song"},
+        {"uri": "spotify:track:second", "name": "Second Song"},
     ]
     assistant.pending_spotify_selection_time = __import__("time").monotonic()
 

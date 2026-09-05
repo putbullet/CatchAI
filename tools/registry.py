@@ -9,6 +9,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from tools.file_actions import open_file
+from tools.cleanup import delete_temp_files
 from tools.folders import open_folder
 from tools.files import search_files
 from tools.media import spotify_search, youtube_search
@@ -34,7 +35,10 @@ from tools.system import (
     set_radio,
     sleep_computer,
     windows_search,
+    get_resource_usage,
+    volume_control,
 )
+from tools.images import show_animal_image
 from tools.web import google_search, open_url
 from tools.weather import get_weather
 from tools.windows import close_application, open_application
@@ -121,6 +125,21 @@ class PowerArgs(BaseModel):
 
 class SettingsArgs(BaseModel):
     page: str = ""
+
+
+class VolumeArgs(BaseModel):
+    action: str
+    application: str = ""
+    percent: float | None = None
+    delta: float | None = None
+
+
+class CleanupArgs(BaseModel):
+    items: list[dict[str, Any]]
+
+
+class AnimalArgs(BaseModel):
+    animal: str
 
 
 class NoArgs(BaseModel):
@@ -218,6 +237,10 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolDefinition("media_mute", "Mute Windows master volume", NoArgs, media_mute, PermissionLevel.SAFE_ACTION))
     registry.register(ToolDefinition("media_set_volume", "Set Windows master volume percentage", PercentArgs, lambda percent: media_set_volume(percent), PermissionLevel.SAFE_ACTION))
     registry.register(ToolDefinition("media_adjust_volume", "Adjust Windows master volume percentage", DeltaArgs, lambda delta: media_adjust_volume(delta), PermissionLevel.SAFE_ACTION))
+    registry.register(ToolDefinition("volume_control", "Read or control system or application volume", VolumeArgs, volume_control, PermissionLevel.SAFE_ACTION))
+    registry.register(ToolDefinition("get_resource_usage", "Read current CPU and RAM usage", NoArgs, get_resource_usage, PermissionLevel.READ_ONLY))
+    registry.register(ToolDefinition("clear_temp_files", "Delete reviewed temporary files after confirmation", CleanupArgs, delete_temp_files, PermissionLevel.DESTRUCTIVE_ACTION))
+    registry.register(ToolDefinition("show_animal_image", "Fetch a cat or dog image", AnimalArgs, show_animal_image, PermissionLevel.SAFE_ACTION))
     registry.register(ToolDefinition("set_brightness", "Set display brightness percentage", PercentArgs, lambda percent: set_brightness(percent), PermissionLevel.SAFE_ACTION))
     registry.register(ToolDefinition("adjust_brightness", "Adjust display brightness percentage", DeltaArgs, lambda delta: adjust_brightness(delta), PermissionLevel.SAFE_ACTION))
     registry.register(ToolDefinition("set_radio", "Enable or disable Wi-Fi or Bluetooth", RadioArgs, set_radio, PermissionLevel.SAFE_ACTION))

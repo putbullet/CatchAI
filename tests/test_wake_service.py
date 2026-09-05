@@ -42,6 +42,25 @@ def test_completed_command_returns_to_waiting_for_wake() -> None:
     ]
 
 
+def test_result_is_published_after_processing_states() -> None:
+    events = []
+
+    class Voice(FakeVoiceAssistant):
+        def run_once(self, **kwargs):
+            return {"success": True, "transcript": "Find my report", "assistant": {"message": "Found it"}}
+
+    service = WakeService(
+        FakeListener([True]),
+        Voice(),
+        on_state=lambda state: events.append(("state", state)),
+        on_command=lambda result: events.append(("result", result["assistant"]["message"])),
+    )
+    service.run_cycle()
+
+    assert events.index(("state", CatchState.RESPONDING)) < events.index(("result", "Found it"))
+    assert events.index(("result", "Found it")) < events.index(("state", CatchState.IDLE))
+
+
 def test_repeated_wake_command_cycles_are_supported() -> None:
     voice = FakeVoiceAssistant()
     service = WakeService(FakeListener([True, True]), voice)

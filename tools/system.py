@@ -8,6 +8,8 @@ import subprocess
 from urllib.parse import quote
 from typing import Any
 
+from config import load_config
+
 
 _VK_MEDIA = {
     "play": 0xB3,
@@ -100,6 +102,83 @@ def media_adjust_volume(delta: float) -> dict[str, Any]:
     except (OSError, RuntimeError, ImportError) as error:
         return {"success": False, "error": f"Could not adjust volume: {error}"}
     return {"success": True, "percent": target, "message": f"Volume set to {target:g}%"}
+
+
+def _session_volume(application: str) -> Any:
+    from pycaw.pycaw import AudioUtilities
+
+    target = application.casefold().removesuffix(".exe").removesuffix(" application").removesuffix(" app").strip()
+    for session in AudioUtilities.GetAllSessions():
+        process = session.Process
+        if process is not None and process.name().casefold().removesuffix(".exe") == target:
+            return session.SimpleAudioVolume
+    return None
+
+
+def volume_control(
+    action: str,
+    application: str = "",
+    percent: float | None = None,
+    delta: float | None = None,
+) -> dict[str, Any]:
+    """Read or change master volume, or a named application's audio session."""
+    if action not in {"up", "down", "set", "mute", "unmute", "get"}:
+        return {"success": False, "error": "Unsupported volume action"}
+    if os.name != "nt":
+        return {"success": False, "error": "Volume control requires Windows"}
+    try:
+        target = _session_volume(application) if application.strip() else _endpoint_volume()
+        if target is None:
+            return {"success": False, "error": f"No active audio session found for {application}"}
+        if application.strip():
+            current = float(target.GetMasterVolume()) * 100
+            setter = target.SetMasterVolume
+            get_mute = target.GetMute
+            set_mute = target.SetMute
+        else:
+            current = float(target.GetMasterVolumeLevelScalar()) * 100
+            setter = lambda value: target.SetMasterVolumeLevelScalar(value / 100, None)
+            get_mute = target.GetMute
+            set_mute = lambda value: target.SetMute(value, None)
+        if action == "get":
+            return {"success": True, "percent": current, "muted": bool(get_mute()), "message": f"{application or 'System'} volume is {current:g}%"}
+        if action == "mute":
+            set_mute(True)
+        elif action == "unmute":
+            set_mute(False)
+        else:
+            if action == "set":
+                target_percent = percent
+            else:
+                configured_step = float(load_config().get("volume", {}).get("adjustment_step_percent", 10))
+                target_percent = current + (delta if delta is not None else configured_step) * (1 if action == "up" else -1)
+            if target_percent is None or not 0 <= target_percent <= 100:
+                return {"success": False, "error": "Volume must be between 0 and 100"}
+            setter(target_percent)
+            current = target_percent
+        label = application or "system"
+        return {"success": True, "percent": current, "application": application, "message": f"{label.title()} volume {'muted' if action == 'mute' else 'unmuted' if action == 'unmute' else f'set to {current:g}%'}"}
+    except (OSError, RuntimeError, ImportError, AttributeError) as error:
+        return {"success": False, "error": f"Could not control volume: {error}"}
+
+
+def get_resource_usage() -> dict[str, Any]:
+    """Return current CPU and memory usage."""
+    try:
+        import psutil
+
+        memory = psutil.virtual_memory()
+        cpu = psutil.cpu_percent(interval=0.1)
+    except (ImportError, OSError, RuntimeError) as error:
+        return {"success": False, "error": f"Could not read resource usage: {error}"}
+    return {
+        "success": True,
+        "cpu_percent": cpu,
+        "memory_percent": memory.percent,
+        "memory_used_gb": memory.used / 1024**3,
+        "memory_total_gb": memory.total / 1024**3,
+        "message": f"CPU is at {cpu:.0f}% and RAM is at {memory.percent:.0f}% ({memory.used / 1024**3:.1f} of {memory.total / 1024**3:.1f} GB).",
+    }
 
 
 def set_brightness(percent: float) -> dict[str, Any]:

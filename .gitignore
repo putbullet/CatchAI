@@ -6,3 +6,20 @@ __pycache__/
 logs/*.log
 data/*
 !data/.gitkeep
+
+# Local secrets and user-specific state.
+secrets.json
+**/secrets.json
+
+# PyInstaller output and other generated build artifacts.
+build/
+dist/
+*.spec.bak
+
+# Downloaded/local speech model weights and audio fixtures.
+models/**/*.onnx
+models/**/*.wav
+
+# Local test and tool output.
+.coverage
+htmlcov/

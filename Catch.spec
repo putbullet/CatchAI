@@ -12,6 +12,8 @@ datas = [
     (str(project_root / "catch_idle.webm"), "."),
     (str(project_root / "catch_listening.webm"), "."),
     (str(project_root / "catch_thinking.webm"), "."),
+    (str(project_root / "ready_for_hey_jarvis.mp3"), "."),
+    (str(project_root / "listening.mp3"), "."),
     *openwakeword_datas,
 ]
 
@@ -35,6 +37,7 @@ exe = EXE(
     analysis.datas,
     [],
     name="Catch",
+    icon=str(project_root / "CatchAI_app_logo.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

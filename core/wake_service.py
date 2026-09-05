@@ -34,6 +34,7 @@ class WakeService:
         self.keep_awake_timeout = keep_awake_timeout
         self._active_timings: dict[str, float] = {}
         self._interrupt_event = threading.Event()
+        self._on_partial: Callable[[str], None] | None = None
 
     def interrupt(self) -> None:
         """Cancel the current command before its result is published."""
@@ -70,9 +71,9 @@ class WakeService:
                 self.state_machine.reset()
                 self._transition(CatchState.WAITING_FOR_WAKE)
                 return {"success": False, "woke": True, "interrupted": True, "state": self.state_machine.state}
-            if self.on_command is not None:
-                self.on_command(result)
             if not result.get("transcript"):
+                if self.on_command is not None:
+                    self.on_command(result)
                 self._transition(CatchState.ERROR)
                 self.state_machine.reset()
                 self._transition(CatchState.WAITING_FOR_WAKE)
@@ -82,31 +83,41 @@ class WakeService:
                 self._transition(CatchState.THINKING)
             self._transition(CatchState.EXECUTING)
             self._transition(CatchState.RESPONDING)
+            if self.on_command is not None:
+                self.on_command(result)
             self._transition(CatchState.IDLE)
             self._transition(CatchState.WAITING_FOR_WAKE)
             if self.keep_awake and result.get("success"):
                 return self._run_keep_awake(result, stop_event)
             return {"success": bool(result.get("success")), "woke": True, "result": result, "state": self.state_machine.state}
         except Exception as error:
+            failure = {"success": False, "woke": True, "error": str(error), "state": CatchState.ERROR}
+            if self.on_command is not None:
+                self.on_command(failure)
+            if self.state_machine.state is not CatchState.ERROR:
+                self._transition(CatchState.ERROR)
             self.state_machine.reset()
             self._transition(CatchState.WAITING_FOR_WAKE)
-            return {"success": False, "woke": True, "error": str(error), "state": self.state_machine.state}
+            failure["state"] = self.state_machine.state
+            return failure
 
     def _run_voice_once(self) -> dict[str, Any]:
         """Run voice capture while supporting state-aware and simple test doubles."""
+        on_state = lambda state: self._transition(CatchState(state))  # noqa: E731
+        speech = load_config().get("speech", {})
+        use_streaming = bool(speech.get("streaming", False)) and hasattr(
+            self.voice_assistant, "run_streaming_once"
+        )
         try:
-            speech = load_config().get("speech", {})
-            streaming = bool(speech.get("streaming", False)) and hasattr(
-                self.voice_assistant, "run_streaming_once"
-            )
-            runner = self.voice_assistant.run_streaming_once if streaming else self.voice_assistant.run_once
+            if use_streaming:
+                return self.voice_assistant.run_streaming_once(
+                    max_duration=float(speech.get("max_duration_seconds", 8.0)),
+                    on_state=on_state,
+                    on_partial=self._on_partial,
+                    timings=self._active_timings,
+                )
             return self.voice_assistant.run_once(
-                on_state=lambda state: self._transition(CatchState(state)),
-                timings=self._active_timings,
-            ) if not streaming else runner(
-                max_duration=float(speech.get("max_duration_seconds", 8.0)),
-                on_state=lambda state: self._transition(CatchState(state)),
-                on_partial=getattr(self, "_on_partial", None),
+                on_state=on_state,
                 timings=self._active_timings,
             )
         except TypeError as error:
@@ -134,9 +145,9 @@ class WakeService:
                 self.state_machine.reset()
                 self._transition(CatchState.WAITING_FOR_WAKE)
                 return {"success": False, "woke": True, "interrupted": True, "state": self.state_machine.state}
-            if self.on_command is not None:
-                self.on_command(result)
             if not result.get("transcript"):
+                if self.on_command is not None:
+                    self.on_command(result)
                 if self.state_machine.state is CatchState.LISTENING:
                     self._transition(CatchState.ERROR)
                 elif self.state_machine.state is CatchState.TRANSCRIBING:
@@ -148,6 +159,8 @@ class WakeService:
                 self._transition(CatchState.THINKING)
             self._transition(CatchState.EXECUTING)
             self._transition(CatchState.RESPONDING)
+            if self.on_command is not None:
+                self.on_command(result)
             self._transition(CatchState.IDLE)
             results.append(result)
             if result.get("success"):

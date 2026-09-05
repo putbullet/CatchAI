@@ -8,6 +8,7 @@ pydantic
 httpx
 PyYAML
 psutil
+wikipedia-api
 pytest
 sherpa-onnx
 soundfile

@@ -11,11 +11,15 @@ from typing import Any, Callable
 from brain.fast_router import (
     classify_application_inventory,
     classify_direct_url,
+    classify_animal_image,
+    classify_cleanup_command,
+    classify_factual_lookup,
     classify_local_command,
     classify_media_command,
     normalize_command_text,
     classify_spotify_command,
     classify_system_command,
+    classify_resource_usage,
     classify_weather_command,
     classify_youtube_command,
     classify_windows_search,
@@ -24,6 +28,9 @@ from brain.llm import CatchLLM, NormalResponse, ToolCallResponse, parse_response
 from core.profile import profile_response
 from tools.registry import ToolRegistry, build_default_registry
 from tools.media import play_youtube_video
+from tools.spotify import play_selected_track
+from tools.cleanup import delete_temp_files, scan_temp_files
+from tools.wikipedia import wikipedia_summary
 from tools.windows import discover_applications, remember_application_alias, resolve_application
 
 
@@ -39,6 +46,8 @@ class CatchAssistant:
         self.pending_application_query = ""
         self.pending_spotify_selection: list[dict[str, Any]] | None = None
         self.pending_spotify_selection_time = 0.0
+        self.pending_cleanup_items: list[dict[str, Any]] | None = None
+        self.pending_cleanup_time = 0.0
 
     def handle_text(self, user_text: str, timings: dict[str, float] | None = None) -> dict[str, Any]:
         """Handle one text request and return a structured assistant result."""
@@ -54,14 +63,29 @@ class CatchAssistant:
         spotify_selection = _select_pending_spotify(user_text, self.pending_spotify_selection, self.pending_spotify_selection_time)
         if spotify_selection is not None:
             self.pending_spotify_selection = None
-            artists = ", ".join(str(value) for value in spotify_selection.get("artists", []))
-            query = str(spotify_selection.get("name", ""))
-            if artists:
-                query = f"{query} by {artists}"
-            result = self.registry.execute("spotify_play", {"query": query})
+            # Play the exact track the user already picked — don't
+            # rebuild a text query and re-run spotify_play(), which
+            # would re-search and re-fuzzy-match from scratch and can
+            # resolve to a different (or again-ambiguous) track.
+            result = play_selected_track(spotify_selection)
             if result.get("success"):
                 result["message"] = f"Okay, I'll play {spotify_selection.get('name', 'that track')} now."
             return _fast_tool_response("spotify_play", result, timings, started)
+        if self.pending_cleanup_items and time.monotonic() - self.pending_cleanup_time <= 20:
+            if _is_confirmation(user_text):
+                items = self.pending_cleanup_items
+                self.pending_cleanup_items = None
+                result = delete_temp_files(items)
+                return _fast_tool_response("clear_temp_files", result, timings, started)
+            if _is_negative(user_text):
+                self.pending_cleanup_items = None
+                return {"success": True, "type": "response", "message": "Okay, I won't clear the temporary files.", "fast_path": True}
+        cleanup_intent = classify_cleanup_command(command_text)
+        if cleanup_intent is not None:
+            scan = scan_temp_files()
+            self.pending_cleanup_items = list(scan.get("items", []))
+            self.pending_cleanup_time = time.monotonic()
+            return _fast_tool_response("clear_temp_files", {"success": False, "confirmation_required": True, **scan}, timings, started)
         direct_url = classify_direct_url(user_text)
         if direct_url is not None:
             timings["routing_complete"] = time.perf_counter()
@@ -72,6 +96,14 @@ class CatchAssistant:
             timings["routing_complete"] = time.perf_counter()
             result = self.registry.execute(media_intent["tool"], media_intent["arguments"])
             return _fast_tool_response(media_intent["tool"], result, timings, started)
+        usage_intent = classify_resource_usage(command_text)
+        if usage_intent is not None:
+            result = self.registry.execute(usage_intent["tool"], usage_intent["arguments"])
+            return _fast_tool_response(usage_intent["tool"], result, timings, started)
+        image_intent = classify_animal_image(command_text)
+        if image_intent is not None:
+            result = self.registry.execute(image_intent["tool"], image_intent["arguments"])
+            return _fast_tool_response(image_intent["tool"], result, timings, started)
         weather_intent = classify_weather_command(command_text)
         if weather_intent is not None:
             timings["routing_complete"] = time.perf_counter()
@@ -198,6 +230,15 @@ class CatchAssistant:
                     "total_time": time.perf_counter() - started,
                 },
             }
+        factual = classify_factual_lookup(command_text)
+        if factual is not None:
+            try:
+                result = wikipedia_summary(factual["topic"])
+            except Exception as error:
+                logging.getLogger(__name__).warning("Wikipedia fast path failed; falling back to Ollama: %s", error)
+                result = {"success": False}
+            if result.get("success"):
+                return {"success": True, "type": "response", "message": result["message"], "fast_path": True}
         planning_started = time.perf_counter()
         timings["ollama_start"] = planning_started
         try:
@@ -264,6 +305,13 @@ class CatchAssistant:
 
 def _local_result_message(tool: str, result: dict[str, Any]) -> str:
     """Turn deterministic tool results into a concise local response."""
+    if result.get("confirmation_required") and tool == "clear_temp_files":
+        items = result.get("items", [])
+        sample = [str(item.get("path", "")) for item in items[:5]]
+        extra = len(items) - len(sample)
+        paths = ", ".join(sample) + (f", +{extra} more" if extra else "")
+        size_gb = float(result.get("size", 0)) / 1024**3
+        return f"I found {len(items)} temporary files ({size_gb:.2f} GB): {paths}. Shall I delete these exact files?"
     if not result.get("success"):
         if result.get("confirmation_required"):
             return f"Please confirm before I {result.get('action', 'perform that power action')}."
@@ -285,6 +333,7 @@ def _local_result_message(tool: str, result: dict[str, Any]) -> str:
             return f"I found {len(names)} matching applications: " + ", ".join(
                 f"{index}. {name}" for index, name in enumerate(names, 1)
             ) + ". Which one would you like?"
+
         return str(result.get("error", "The local command failed."))
     if tool == "open_application":
         return f"{result.get('application', 'Application')} opened."
@@ -296,7 +345,19 @@ def _local_result_message(tool: str, result: dict[str, Any]) -> str:
         return result.get("message", "Website opened.")
     if tool == "spotify_play" and result.get("message"):
         return str(result["message"])
+    if tool == "clear_temp_files":
+        return f"Deleted {result.get('deleted', 0)} files and freed {result.get('freed', 0) / 1024**3:.2f} GB; skipped {result.get('skipped', 0)}."
+    if tool == "show_animal_image":
+        return str(result.get("message", "The image is ready."))
     return "Done."
+
+
+def _is_confirmation(text: str) -> bool:
+    return " ".join(text.casefold().split()).strip(" .!?") in {"yes", "yeah", "yep", "go ahead", "do it", "confirm", "clear them"}
+
+
+def _is_negative(text: str) -> bool:
+    return " ".join(text.casefold().split()).strip(" .!?") in {"no", "nope", "cancel", "don't", "do not"}
 
 
 def _select_pending_application(text: str, candidates: list[dict[str, Any]] | None) -> dict[str, Any] | None:

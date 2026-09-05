@@ -41,6 +41,10 @@ _WEATHER_PATTERN = re.compile(
     r"[.!?]*$",
     re.IGNORECASE,
 )
+_FACTUAL_PATTERN = re.compile(
+    r"^(?:who\s+is|what\s+is|what\s+are|tell\s+me\s+about)\s+(?P<topic>.+?)[.!?]*$",
+    re.IGNORECASE,
+)
 _FOLDER_ALIASES = {
     "desktop": "Desktop",
     "my desktop": "Desktop",
@@ -120,11 +124,64 @@ def classify_media_command(text: str) -> dict[str, Any] | None:
         "previous song": "media_previous",
         "stop": "media_stop",
         "mute": "media_mute",
-        "volume up": "media_volume_up",
-        "volume down": "media_volume_down",
+        "volume up": "volume_control",
+        "volume down": "volume_control",
+        "increase volume": "volume_control",
+        "decrease volume": "volume_control",
     }
     if cleaned in exact:
-        return {"tool": exact[cleaned], "arguments": {}}
+        tool = exact[cleaned]
+        if tool == "volume_control":
+            return {"tool": tool, "arguments": {"action": "up" if cleaned in {"volume up", "increase volume"} else "down"}}
+        return {"tool": tool, "arguments": {}}
+    match = re.match(
+        r"^(?:set|put)\s+(?P<application>.+?)['’]s\s+volume\s+(?:to|at)\s+(?P<percent>\d+(?:\.\d+)?)\s*%?$",
+        cleaned,
+    )
+    if match:
+        return {"tool": "volume_control", "arguments": {"action": "set", "application": (match.group("application") or "").strip(), "percent": float(match.group("percent"))}}
+    match = re.match(
+        r"^(?:set|put)\s+volume\s+(?:of|for)\s+(?P<application>.+?)\s+(?:to|at)\s+(?P<percent>\d+(?:\.\d+)?)\s*%?$",
+        cleaned,
+    )
+    if match:
+        return {"tool": "volume_control", "arguments": {"action": "set", "application": match.group("application").strip(), "percent": float(match.group("percent"))}}
+    match = re.match(
+        r"^(?:set|put)\s+(?P<application>.+?)\s+volume\s+(?:to|at)\s+(?P<percent>\d+(?:\.\d+)?)\s*%?$",
+        cleaned,
+    )
+    if match:
+        return {"tool": "volume_control", "arguments": {"action": "set", "application": match.group("application").strip(), "percent": float(match.group("percent"))}}
+    match = re.match(r"^(?:what(?:'s| is)|get)\s+(?:(?P<application>.+?)['’]s\s+)?volume$", cleaned)
+    if match:
+        return {"tool": "volume_control", "arguments": {"action": "get", "application": (match.group("application") or "").strip()}}
+    match = re.match(r"^(?:what(?:'s| is)|get)\s+volume\s+(?:of|for)\s+(?P<application>.+?)$", cleaned)
+    if match:
+        return {"tool": "volume_control", "arguments": {"action": "get", "application": match.group("application").strip()}}
+    match = re.match(r"^what\s+is\s+(?P<application>.+?)\s+volume$", cleaned)
+    if match:
+        return {"tool": "volume_control", "arguments": {"action": "get", "application": match.group("application").strip()}}
+    match = re.match(
+        r"^(?:turn\s+up|increase|raise)\s+(?:the\s+)?volume(?:\s+(?:of|for)\s+(?P<application>.+?))?$|"
+        r"^(?:turn\s+up|increase|raise)\s+(?P<direct_application>.+?)(?:'s)?\s+volume$",
+        cleaned,
+    )
+    if match:
+        application = match.group("application") or match.group("direct_application") or ""
+        return {"tool": "volume_control", "arguments": {"action": "up", "application": application.strip(" '")}}
+    match = re.match(
+        r"^(?:turn\s+down|decrease|lower)\s+(?:the\s+)?volume(?:\s+(?:of|for)\s+(?P<application>.+?))?$|"
+        r"^(?:turn\s+down|decrease|lower)\s+(?P<direct_application>.+?)(?:'s)?\s+volume$",
+        cleaned,
+    )
+    if match:
+        application = match.group("application") or match.group("direct_application") or ""
+        return {"tool": "volume_control", "arguments": {"action": "down", "application": application.strip(" '")}}
+    match = re.match(r"^(?:mute|unmute)(?:\s+(?P<application>.+?))?$", cleaned)
+    if match:
+        return {"tool": "volume_control", "arguments": {"action": "mute" if cleaned.startswith("mute") else "unmute", "application": (match.group("application") or "").strip()}}
+    if cleaned in {"what is my volume", "get current volume", "what's my volume"}:
+        return {"tool": "volume_control", "arguments": {"action": "get"}}
     match = re.match(r"^(?:set\s+)?(?:the\s+)?volume\s+(?:to|at)\s+(?P<percent>\d+(?:\.\d+)?)\s*%?$", cleaned)
     if match:
         return {"tool": "media_set_volume", "arguments": {"percent": float(match.group("percent"))}}
@@ -135,6 +192,38 @@ def classify_media_command(text: str) -> dict[str, Any] | None:
             amount = -amount
         return {"tool": "media_adjust_volume", "arguments": {"delta": amount}}
     return None
+
+
+def classify_resource_usage(text: str) -> dict[str, Any] | None:
+    cleaned = normalize_command_text(text).casefold().strip(" .!?")
+    if re.search(r"\b(?:cpu|processor)\b", cleaned) and any(word in cleaned for word in ("usage", "load", "utilization", "how much")):
+        return {"tool": "get_resource_usage", "arguments": {}}
+    if re.search(r"\b(?:ram|memory)\b", cleaned) and any(word in cleaned for word in ("usage", "used", "using", "how much")):
+        return {"tool": "get_resource_usage", "arguments": {}}
+    return None
+
+
+def classify_cleanup_command(text: str) -> dict[str, Any] | None:
+    cleaned = normalize_command_text(text).casefold().strip(" .!?")
+    if cleaned in {"clear temporary files", "clean temporary files", "clear temp files", "clean temp files"}:
+        return {"tool": "clear_temp_files", "arguments": {}}
+    return None
+
+
+def classify_animal_image(text: str) -> dict[str, Any] | None:
+    cleaned = normalize_command_text(text).casefold()
+    animal = "cat" if "cat" in cleaned else "dog" if "dog" in cleaned else ""
+    if animal and any(word in cleaned for word in ("image", "picture", "photo", "show me", "show a", "give me")):
+        return {"tool": "show_animal_image", "arguments": {"animal": animal}}
+    return None
+
+
+def classify_factual_lookup(text: str) -> dict[str, Any] | None:
+    match = _FACTUAL_PATTERN.match(normalize_command_text(text))
+    if not match:
+        return None
+    topic = match.group("topic").strip(" .!?")
+    return {"topic": topic} if topic else None
 
 
 def classify_weather_command(text: str) -> dict[str, Any] | None:

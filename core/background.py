@@ -63,7 +63,9 @@ class CatchBackgroundWorker(QObject):
             self.finished.emit()
 
     def _on_result(self, result: dict) -> None:
-        self.state_changed.emit(str(result.get("state", CatchState.WAITING_FOR_WAKE.value)))
+        state = result.get("state", CatchState.WAITING_FOR_WAKE.value)
+        state_value = state.value if isinstance(state, CatchState) else str(state)
+        self.state_changed.emit(state_value)
         self.result_ready.emit(result)
 
     def _on_command(self, result: dict) -> None:
@@ -73,6 +75,9 @@ class CatchBackgroundWorker(QObject):
             self.user_text.emit(result["transcript"])
         if assistant_result.get("message"):
             self.assistant_text.emit(assistant_result["message"])
+        if assistant_result.get("tool_result", {}).get("image_path"):
+            self.result_ready.emit({"result": result, "state": "waiting_for_wake", "woke": True})
+            return
         elif result.get("error"):
             self.assistant_text.emit(f"Error: {result['error']}")
         self.result_ready.emit({"result": result, "state": "waiting_for_wake", "woke": True})

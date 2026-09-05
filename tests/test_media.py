@@ -33,6 +33,23 @@ def test_spotify_search_uses_spotapi_provider(monkeypatch) -> None:
     assert result["tracks"][0]["name"] == "Daft Punk"
 
 
+def test_spotify_search_times_out_without_blocking(monkeypatch) -> None:
+    class HangingProvider:
+        def search(self, query, limit):
+            import time
+
+            time.sleep(60)
+            return []
+
+    monkeypatch.setattr("tools.spotify._provider", lambda: HangingProvider())
+    monkeypatch.setattr("tools.spotify.Queue.get", lambda self, timeout: (_ for _ in ()).throw(__import__("queue").Empty()))
+
+    result = spotify_search("Chlorine by Twenty One Pilots")
+
+    assert result["success"] is False
+    assert result["error"] == "Spotify search timed out"
+
+
 def test_spotify_play_matches_title_and_artist_without_application_message(monkeypatch) -> None:
     class FakeProvider:
         def search(self, query, limit):
@@ -52,6 +69,25 @@ def test_spotify_play_matches_title_and_artist_without_application_message(monke
     assert result["track"]["artists"][0] == "Chrystal"
 
 
+def test_spotify_play_selects_exact_title_and_artist_among_versions(monkeypatch) -> None:
+    class FakeProvider:
+        def search(self, query, limit):
+            return [
+                {"id": "1", "uri": "spotify:track:1", "name": "Chlorine", "artists": ["Twenty One Pilots"], "album": "Trench"},
+                {"id": "2", "uri": "spotify:track:2", "name": "Chlorine (Mexico City)", "artists": ["Twenty One Pilots"], "album": "Live"},
+            ]
+
+        def play(self, track):
+            return {"success": True, "track": track, "message": "Playing Chlorine"}
+
+    monkeypatch.setattr("tools.spotify._provider", lambda: FakeProvider())
+
+    result = spotify_play("Chlorine by Twenty One Pilots")
+
+    assert result["success"] is True
+    assert result["track"]["id"] == "1"
+
+
 def test_spotify_play_falls_back_to_desktop_deep_link(monkeypatch) -> None:
     opened = []
     monkeypatch.setattr("tools.spotify.os.name", "nt")
@@ -66,6 +102,21 @@ def test_spotify_play_falls_back_to_desktop_deep_link(monkeypatch) -> None:
     assert result["success"] is True
     assert result["fallback"] == "desktop_link"
     assert opened[-1] == "spotify:track:1"
+
+
+def test_spotify_play_surfaces_provider_exceptions(monkeypatch) -> None:
+    class BrokenProvider:
+        def search(self, query, limit=5):
+            return [{"id": "1", "uri": "spotify:track:1", "name": "Chlorine", "artists": ["Twenty One Pilots"], "album": ""}]
+
+        def play(self, track):
+            raise RuntimeError("player unavailable")
+
+    monkeypatch.setattr("tools.spotify._provider", lambda: BrokenProvider())
+    result = spotify_play("Chlorine by Twenty One Pilots")
+
+    assert result["success"] is False
+    assert "Spotify playback failed" in result["error"]
 
 
 def test_youtube_search_requires_environment_key(monkeypatch) -> None:
