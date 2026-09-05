@@ -1,0 +1,63 @@
+app:
+  name: Catch
+  debug: true
+
+llm:
+  provider: ollama
+  host: http://localhost:11434
+  model: qwen3.5:0.8b
+  temperature: 0.1
+  timeout_seconds: 30
+  think: false
+  max_tokens: 128
+
+#speech: (old whisper config)
+  #model: tiny.en
+  #device: cpu
+  #compute_type: int8
+
+speech:
+  model: moonshine-tiny-en-int8
+  device: cpu
+  num_threads: 2
+  streaming: true
+  max_duration_seconds: 8
+  partial_interval_seconds: 0.45
+  silence_duration_seconds: 0.9
+
+wakeword:
+  enabled: true
+  phrase: Hey Jarvis
+  model: hey_jarvis
+  threshold: 0.5
+  keep_awake: true
+  keep_awake_timeout_seconds: 12
+
+files:
+  search_roots:
+    - Desktop
+    - Documents
+    - Downloads
+
+browser:
+  default_browser: default
+
+weather:
+  provider: openweathermap
+  units: metric
+  language: en
+  # Store OPENWEATHER_API_KEY in %LOCALAPPDATA%\Catch\secrets.json or the environment.
+  use_profile_location: true
+
+applications:
+  calculator:
+    executable: calc.exe
+  firefox:
+    executable: firefox.exe
+  spotify:
+    executable: spotify.exe
+  vscode:
+    executable: code.exe
+
+logging:
+  level: INFO

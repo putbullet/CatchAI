@@ -1,0 +1,15 @@
+faster-whisper
+numpy
+sounddevice
+openwakeword
+PySide6
+ollama
+pydantic
+httpx
+PyYAML
+psutil
+pytest
+sherpa-onnx
+soundfile
+spotapi
+pycaw
