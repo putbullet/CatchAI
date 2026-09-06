@@ -236,3 +236,19 @@ The executable now uses the bundled `CatchAI_app_logo.ico`, generated from
 The Start-with-Windows flow still needs a final end-to-end verification,
 including reliably starting the executable and ensuring Ollama is already
 running or is started so Catch is ready immediately after login.
+
+## Contributing
+
+Catch is an open-source beta project, and contributions are very welcome. If you clone or fork this repository and discover bugs, broken features, performance issues, or anything that can be improved, feel free to fix them and make Catch better for everyone.
+
+You are also completely free to customize Catch for your own needs and use cases. Modify the interface, add new commands, improve existing features, experiment with different models, or adapt the assistant however you like.
+
+If you find a problem, have an idea, or want to contribute directly, feel free to contact me at **soulaimanettabaas@gmail.com**.
+
+### A Note About Development
+
+Catch is still **actively under development and testing**. This repository should be considered a **beta**, not a production-ready application intended for general users. Some features may be experimental, unstable, or require additional configuration, and breaking changes may happen as development continues.
+
+The project was developed and delivered in a relatively short period of time, so **GitHub Copilot in VS Code** was used as part of the development process. For a project of this size and scope, using AI-assisted development tools is a normal part of the workflow and helped accelerate implementation, debugging, and iteration. The project was not produced through 100% manual typing, and that is intentional.
+
+The goal is not to present Catch as a finished or perfect piece of software, but to share a working foundation that can be tested, improved, customized, and built upon by anyone interested in it.
