@@ -165,11 +165,12 @@ Never paste real credentials into source files, commits, issues, or logs.
 
    The downloaded files are intentionally local and ignored by Git.
 
-5. Install/start Ollama and pull the configured model:
+5. Install/start Ollama and pull the configured model [Download Ollama from here](https://ollama.com/download/windows):
 
    ```powershell
    ollama pull qwen3.5:0.8b
    ```
+   [See other models supported by Ollama](https://ollama.com/search):
 
 6. Copy `secrets.example.json` to `%LOCALAPPDATA%\Catch\secrets.json` and
    configure the required services.
