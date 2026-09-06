@@ -1,7 +1,10 @@
-<img src="./CatchAI.png" alt="Catch Logo">
-# Catch
+<p align="center">
+  <img src="./CatchAI.png" alt="Catch Logo" width="390">
+</p>
 
-Catch is a local-first Windows voice assistant built as a personal beta/testing
+## Catch
+
+Catch is a local Windows voice assistant built as a personal beta/testing
 project. It is not intended for public deployment or production use. The
 repository is public and open: clone it, fork it, modify it, and build on it
 for your own experiments.
