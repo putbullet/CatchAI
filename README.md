@@ -1,3 +1,4 @@
+<img src="./CatchAI.png" alt="Catch Logo">
 # Catch
 
 Catch is a local-first Windows voice assistant built as a personal beta/testing
