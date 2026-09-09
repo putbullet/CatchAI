@@ -2,6 +2,15 @@
   <img src="./CatchAI.png" alt="Catch Logo" width="390">
 </p>
 
+
+
+<p align="center">
+  <a href="https://drive.google.com/file/d/1oXY8aIcIgz2ueqnJIVCBn0-e8eUrWxHY/view?usp=sharing">
+    <img src="./Click_To_See_The_DEMO.png" alt="Click to see CatchAI demo" width="700">
+  </a>
+</p>
+
+
 ## Catch
 
 Catch is a local Windows voice assistant built as a personal beta/testing
