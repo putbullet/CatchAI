@@ -49,11 +49,22 @@ def main() -> int:
     mode.add_argument("--voice", action="store_true", help="Record and handle one voice request")
     mode.add_argument("--listen", action="store_true", help="Continuously listen for the configured wake word")
     mode.add_argument("--tray", action="store_true", help="Run the Catch system-tray shell")
+    mode.add_argument("--health", action="store_true", help="Run diagnostic health checks on Catch components")
     parser.add_argument("--duration", type=float, default=5.0, help="Voice recording duration in seconds")
     parser.add_argument("--device", type=int, default=None, help="Voice input device ID")
     args = parser.parse_args()
-    if not any((args.text, args.voice, args.listen, args.tray)):
+    if not any((args.text, args.voice, args.listen, args.tray, args.health)):
         args.tray = True
+
+    if args.health:
+        from core.health import check_health
+        report = check_health()
+        print(f"CatchAI Component Health (System Status: {'HEALTHY' if report.healthy else 'DEGRADED'}):")
+        for comp in report.components:
+            status_symbol = "[OK]" if comp.available else ("[WARN]" if not comp.critical else "[FAIL]")
+            print(f"  {status_symbol:<8} {comp.name:<18} : {comp.details}")
+        return 0 if report.healthy else 1
+
 
     try:
         if args.tray:

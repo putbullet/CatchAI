@@ -46,10 +46,8 @@ class SpotifyProvider:
         email = get_secret("SPOTIFY_TEST_EMAIL")
         password = get_secret("SPOTIFY_TEST_PASSWORD")
         if not email or not password:
-            return {
-                "success": False,
-                "error": "Spotify testing credentials are not configured",
-            }
+            logging.getLogger(__name__).info("SpotAPI credentials not set; opening track directly in Spotify desktop app.")
+            return _open_spotify_track(track)
         try:
             launch_result = open_application("spotify")
             if not launch_result.get("success"):
@@ -144,16 +142,19 @@ def spotify_search(query: str, limit: int = 5) -> dict[str, Any]:
 
 
 def spotify_play(query: str) -> dict[str, Any]:
-    results = spotify_search(query, limit=5)
+    cleaned_query = re.sub(r"\s+on\s+spotify$", "", query, flags=re.IGNORECASE).strip()
+    results = spotify_search(cleaned_query, limit=5)
     if not results.get("success"):
         return results
     tracks = results["tracks"]
-    normalized = _normalize_text(query)
+    normalized = _normalize_text(cleaned_query)
     title_query, artist_query = _split_track_query(normalized)
     scored = []
+    undesired_terms = {"karaoke", "tribute", "instrumental", "cover", "parody"}
     for track in tracks:
-        title_score = SequenceMatcher(None, title_query, _normalize_text(track["name"])).ratio()
-        if _normalize_text(track["name"]).startswith(title_query):
+        track_name_norm = _normalize_text(track["name"])
+        title_score = SequenceMatcher(None, title_query, track_name_norm).ratio()
+        if track_name_norm.startswith(title_query):
             title_score = max(title_score, 0.9)
         artist_score = (
             max((SequenceMatcher(None, artist_query, _normalize_text(artist)).ratio() for artist in track["artists"]), default=0.0)
@@ -161,6 +162,9 @@ def spotify_play(query: str) -> dict[str, Any]:
             else 0.0
         )
         score = title_score if not artist_query else (title_score * 0.55 + artist_score * 0.45)
+        for term in undesired_terms:
+            if term in track_name_norm and term not in normalized:
+                score -= 0.35
         scored.append((score, track))
     scored.sort(key=lambda item: item[0], reverse=True)
     exact_title_matches = [

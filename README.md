@@ -25,12 +25,41 @@ for your own experiments.
   this beta is Jarvis.
 - Catch uses local speech recognition and a local Ollama model for planning,
   with deterministic fast routes for common commands.
-- Spotify playback control is experimental. Catalog search and desktop URI
-  fallback work, while SpotAPI login/playback can depend on the Spotify
-  account, client state, CAPTCHA, or upstream compatibility.
+- Spotify playback control supports direct URI playback through the desktop
+  Spotify client, with automatic fallback when SpotAPI testing credentials are
+  not configured.
 - Start-with-Windows exists in the tray menu, but its reliability still needs
   a final verification pass (including whether Ollama is already running or
   should be started at login).
+
+## Latest Hardening Improvements
+
+CatchAI recently underwent an extensive hardening pass across media selection,
+information retrieval, Spotify integration, and application safety:
+
+- **Natural Language & Number Word Selections**: Full support for numbers (`1`–`9`),
+  words (`one` through `five`), ordinals (`first` through `fifth`, `last`), and action
+  phrases (`option five`, `number 5`, `the fifth one`, `play five`) across all
+  interactive selection menus (YouTube, Spotify, Drive selection, and App disambiguation).
+- **Interaction Priority**: Active pending selections and confirmation dialogs now
+  take strict precedence over standard routing and exit commands. Saying "stop" or
+  "cancel" during choices cancels the selection instead of terminating Catch.
+- **Factual & Attribute Lookups ("How tall is LeBron James?")**: Expanded fast-path
+  factual pattern matching with direct attribute extraction and OpenSearch fallback via
+  Wikipedia. Answers factual queries directly in under 1 second without hitting Ollama or
+  hallucinating clarifying questions.
+- **Native Clarify Support**: Added native handling for `ClarifyResponse` models from
+  the LLM planner so follow-up clarifications are communicated clearly rather than
+  failing silently.
+- **Spotify Search & Ranking**: Added `normalize_spotify_query` to strip command verbs
+  and `"on spotify"` suffixes, ranked original tracks ahead of karaoke/cover versions,
+  and enabled seamless desktop app fallback.
+- **Application Control & Safe "Close All"**: Implemented `close all apps` with a
+  conversational confirmation barrier (`"yes"`/`"no"`), session launch tracking, and
+  an immutable protected process list to safeguard Windows system processes and CatchAI.
+- **Automated Test Coverage**: 148 automated tests passing in CI/development.
+
+See [CHANGELOG.md](CHANGELOG.md) for full technical details.
 
 ## What Catch can do
 

@@ -13,6 +13,7 @@ from brain.fast_router import (
     classify_direct_url,
     classify_animal_image,
     classify_cleanup_command,
+    classify_exit_command,
     classify_factual_lookup,
     classify_local_command,
     classify_media_command,
@@ -24,14 +25,15 @@ from brain.fast_router import (
     classify_youtube_command,
     classify_windows_search,
 )
-from brain.llm import CatchLLM, NormalResponse, ToolCallResponse, parse_response
+from brain.llm import CatchLLM, ClarifyResponse, NormalResponse, ToolCallResponse, parse_response
 from core.profile import profile_response
 from tools.registry import ToolRegistry, build_default_registry
 from tools.media import play_youtube_video
 from tools.spotify import play_selected_track
-from tools.cleanup import delete_temp_files, scan_temp_files
+from tools.cleanup import delete_temp_files, scan_temp_files, get_available_drives
 from tools.wikipedia import wikipedia_summary
 from tools.windows import discover_applications, remember_application_alias, resolve_application
+
 
 
 class CatchAssistant:
@@ -48,6 +50,7 @@ class CatchAssistant:
         self.pending_spotify_selection_time = 0.0
         self.pending_cleanup_items: list[dict[str, Any]] | None = None
         self.pending_cleanup_time = 0.0
+        self.pending_close_all_time = 0.0
 
     def handle_text(self, user_text: str, timings: dict[str, float] | None = None) -> dict[str, Any]:
         """Handle one text request and return a structured assistant result."""
@@ -71,6 +74,52 @@ class CatchAssistant:
             if result.get("success"):
                 result["message"] = f"Okay, I'll play {spotify_selection.get('name', 'that track')} now."
             return _fast_tool_response("spotify_play", result, timings, started)
+
+        # Check pending YouTube selection (timeout 30s)
+        if self.youtube_results and time.monotonic() - getattr(self, "pending_youtube_time", 0.0) <= 30:
+            if _is_negative(user_text):
+                self.youtube_results = []
+                return {"success": True, "type": "response", "message": "Okay, YouTube playback cancelled.", "fast_path": True}
+            selected_yt = _select_youtube_result(command_text, self.youtube_results)
+            if selected_yt is not None:
+                self.youtube_results = []
+                timings["routing_complete"] = time.perf_counter()
+                timings["tool_execution_start"] = time.perf_counter()
+                result = play_youtube_video(selected_yt)
+                timings["tool_execution_complete"] = time.perf_counter()
+                return {
+                    "success": bool(result.get("success")),
+                    "type": "tool_result",
+                    "tool": "youtube_play",
+                    "tool_result": result,
+                    "message": result.get("message", str(result.get("error", "YouTube playback failed"))),
+                    "fast_path": True,
+                    "timings": {**_duration_timings(timings), "total_time": time.perf_counter() - started},
+                }
+
+        # Check pending close all confirmation (timeout 20s)
+        if getattr(self, "pending_close_all_time", 0.0) and time.monotonic() - self.pending_close_all_time <= 20:
+            if _is_confirmation(user_text):
+                self.pending_close_all_time = 0.0
+                result = self.registry.execute("close_all_applications", {"confirm": True})
+                return _fast_tool_response("close_all_applications", result, timings, started)
+            if _is_negative(user_text):
+                self.pending_close_all_time = 0.0
+                return {"success": True, "type": "response", "message": "Okay, I won't close your applications.", "fast_path": True}
+
+        # Check pending drive selection for cleanup
+        if getattr(self, "pending_drive_selection", None) and time.monotonic() - getattr(self, "pending_drive_time", 0.0) <= 20:
+            picked_drive = _select_pending_drive(command_text, self.pending_drive_selection)
+            if picked_drive:
+                self.pending_drive_selection = None
+                scan = scan_temp_files(picked_drive)
+                self.pending_cleanup_items = list(scan.get("items", []))
+                self.pending_cleanup_time = time.monotonic()
+                return _fast_tool_response("clear_temp_files", {"success": False, "confirmation_required": True, **scan}, timings, started)
+            elif _is_negative(user_text):
+                self.pending_drive_selection = None
+                return {"success": True, "type": "response", "message": "Okay, disk cleanup cancelled.", "fast_path": True}
+
         if self.pending_cleanup_items and time.monotonic() - self.pending_cleanup_time <= 20:
             if _is_confirmation(user_text):
                 items = self.pending_cleanup_items
@@ -80,12 +129,39 @@ class CatchAssistant:
             if _is_negative(user_text):
                 self.pending_cleanup_items = None
                 return {"success": True, "type": "response", "message": "Okay, I won't clear the temporary files.", "fast_path": True}
+
+        exit_intent = classify_exit_command(command_text)
+        if exit_intent is not None:
+            return {
+                "success": True,
+                "type": "exit",
+                "message": "Goodbye!",
+                "fast_path": True,
+            }
+
         cleanup_intent = classify_cleanup_command(command_text)
         if cleanup_intent is not None:
-            scan = scan_temp_files()
+            target_drive = cleanup_intent.get("arguments", {}).get("drive")
+            # Only prompt for drive disambiguation if user specifically asked for generic disk cleanup (e.g. "clean the disk")
+            # and multiple fixed drives are available.
+            if not target_drive and any(term in command_text.casefold() for term in ("disk", "drive")) and not any(term in command_text.casefold() for term in ("temp", "temporary", "junk")):
+                drives = get_available_drives()
+                if len(drives) > 1:
+                    self.pending_drive_selection = drives
+                    self.pending_drive_time = time.monotonic()
+                    drive_list = " and ".join(f"{d}:" for d in drives)
+                    return {
+                        "success": True,
+                        "type": "response",
+                        "message": f"I found {drive_list}. Which drive should I clean?",
+                        "fast_path": True,
+                    }
+            scan = scan_temp_files(target_drive)
             self.pending_cleanup_items = list(scan.get("items", []))
             self.pending_cleanup_time = time.monotonic()
             return _fast_tool_response("clear_temp_files", {"success": False, "confirmation_required": True, **scan}, timings, started)
+
+
         direct_url = classify_direct_url(user_text)
         if direct_url is not None:
             timings["routing_complete"] = time.perf_counter()
@@ -125,10 +201,13 @@ class CatchAssistant:
             result = self.registry.execute("youtube_search", youtube_intent["arguments"])
             if result.get("success"):
                 self.youtube_results = list(result.get("videos", []))
+                self.pending_youtube_time = time.monotonic()
                 if youtube_intent.get("direct_play") and self.youtube_results:
                     result = play_youtube_video(self.youtube_results[0])
+                    self.youtube_results = []
                 else:
                     result["message"] = _youtube_results_message(self.youtube_results)
+
             return {
                 "success": bool(result.get("success")),
                 "type": "tool_result",
@@ -209,6 +288,14 @@ class CatchAssistant:
         local_intent = classify_local_command(command_text)
         timings["routing_complete"] = time.perf_counter()
         if local_intent is not None:
+            if local_intent["tool"] == "close_all_applications":
+                self.pending_close_all_time = time.monotonic()
+                return {
+                    "success": True,
+                    "type": "response",
+                    "message": "Are you sure you want to close all opened applications? Say yes to confirm or no to cancel.",
+                    "fast_path": True,
+                }
             timings["tool_execution_start"] = time.perf_counter()
             result = self.registry.execute(local_intent["tool"], local_intent["arguments"])
             timings["tool_execution_complete"] = time.perf_counter()
@@ -233,7 +320,7 @@ class CatchAssistant:
         factual = classify_factual_lookup(command_text)
         if factual is not None:
             try:
-                result = wikipedia_summary(factual["topic"])
+                result = wikipedia_summary(factual["topic"], attribute=factual.get("attribute"))
             except Exception as error:
                 logging.getLogger(__name__).warning("Wikipedia fast path failed; falling back to Ollama: %s", error)
                 result = {"success": False}
@@ -250,6 +337,8 @@ class CatchAssistant:
 
         if isinstance(planned, NormalResponse):
             return {"success": True, "message": planned.message, "type": "response"}
+        if isinstance(planned, ClarifyResponse):
+            return {"success": True, "message": planned.message, "type": "clarify"}
         if not isinstance(planned, ToolCallResponse):
             return {"success": False, "error": "Unsupported Catch response"}
 
@@ -280,6 +369,8 @@ class CatchAssistant:
             return {"success": False, "tool": planned.tool, "tool_result": tool_result, "error": str(error)}
         response_time = time.perf_counter() - response_started
 
+        if isinstance(final_response, ClarifyResponse):
+            return {"success": True, "message": final_response.message, "type": "clarify"}
         if not isinstance(final_response, NormalResponse):
             return {
                 "success": False,
@@ -339,6 +430,8 @@ def _local_result_message(tool: str, result: dict[str, Any]) -> str:
         return f"{result.get('application', 'Application')} opened."
     if tool == "close_application":
         return f"{result.get('application', 'Application')} closed."
+    if tool == "close_all_applications":
+        return str(result.get("message", "Closed opened applications."))
     if tool == "open_folder":
         return f"{result.get('folder', 'Folder')} opened."
     if tool == "open_url":
@@ -349,15 +442,71 @@ def _local_result_message(tool: str, result: dict[str, Any]) -> str:
         return f"Deleted {result.get('deleted', 0)} files and freed {result.get('freed', 0) / 1024**3:.2f} GB; skipped {result.get('skipped', 0)}."
     if tool == "show_animal_image":
         return str(result.get("message", "The image is ready."))
+    if result.get("message"):
+        return str(result["message"])
     return "Done."
 
 
 def _is_confirmation(text: str) -> bool:
-    return " ".join(text.casefold().split()).strip(" .!?") in {"yes", "yeah", "yep", "go ahead", "do it", "confirm", "clear them"}
+    return " ".join(text.casefold().split()).strip(" .!?") in {
+        "yes", "yeah", "yep", "go ahead", "do it", "confirm", "clear them",
+        "close them", "close all", "sure", "ok", "okay", "please do",
+    }
 
 
 def _is_negative(text: str) -> bool:
-    return " ".join(text.casefold().split()).strip(" .!?") in {"no", "nope", "cancel", "don't", "do not"}
+    return " ".join(text.casefold().split()).strip(" .!?") in {
+        "no", "nope", "cancel", "don't", "do not", "never mind", "nevermind",
+        "stop", "abort", "quit", "exit", "neither", "none",
+    }
+
+
+_WORD_TO_INDEX: dict[str, int] = {
+    "1": 0, "first": 0, "one": 0,
+    "2": 1, "second": 1, "two": 1,
+    "3": 2, "third": 2, "three": 2,
+    "4": 3, "fourth": 3, "four": 3,
+    "5": 4, "fifth": 4, "five": 4,
+    "6": 5, "sixth": 5, "six": 5,
+    "7": 6, "seventh": 6, "seven": 6,
+    "8": 7, "eighth": 7, "eight": 7,
+    "9": 8, "ninth": 8, "nine": 8,
+}
+
+
+def _parse_selection_intent(text: str, total_items: int) -> int | None:
+    """Resolve an ordinal, word number, digit, or selection phrase to a 0-based index."""
+    if total_items <= 0:
+        return None
+    cleaned = " ".join(text.casefold().split()).strip(" .!?#\"'")
+    if not cleaned:
+        return None
+
+    if cleaned in _WORD_TO_INDEX:
+        idx = _WORD_TO_INDEX[cleaned]
+        return idx if 0 <= idx < total_items else None
+
+    if cleaned in {"last", "the last", "the last one", "last one"}:
+        return total_items - 1
+
+    pattern = re.compile(
+        r"^(?:(?:please\s+)?(?:play|watch|open|choose|pick|select|listen\s+to|give\s+me|i\s+want|i'll\s+take|take)\s+)?"
+        r"(?:the\s+)?"
+        r"(?:number\s+|option\s+|result\s+|choice\s+|video\s+|song\s+|track\s+|item\s+|#\s*)?"
+        r"(?P<target>[a-z0-9]+)"
+        r"(?:\s+one)?$",
+        re.IGNORECASE,
+    )
+    match = pattern.match(cleaned)
+    if match:
+        target = match.group("target").casefold()
+        if target in _WORD_TO_INDEX:
+            idx = _WORD_TO_INDEX[target]
+            return idx if 0 <= idx < total_items else None
+        if target in {"last"}:
+            return total_items - 1
+
+    return None
 
 
 def _select_pending_application(text: str, candidates: list[dict[str, Any]] | None) -> dict[str, Any] | None:
@@ -367,18 +516,12 @@ def _select_pending_application(text: str, candidates: list[dict[str, Any]] | No
     cleaned = " ".join(text.casefold().split()).strip(" .!?")
     if cleaned in {"yes", "yeah", "correct", "that one"}:
         return candidates[0]
-    ordinal_words = {"first": 1, "one": 1, "second": 2, "two": 2, "third": 3, "three": 3, "fourth": 4, "four": 4}
-    match = re.search(r"\b(first|second|third|fourth|one|two|three|four|last)\b", cleaned)
-    index = -1 if match and match.group(1) == "last" else None
-    if match and index is None:
-        index = ordinal_words[match.group(1)] - 1
-    number = re.search(r"\b(?:number\s+)?(\d+)\b", cleaned)
-    if number:
-        index = int(number.group(1)) - 1
-    if index is not None and -len(candidates) <= index < len(candidates):
-        return candidates[index]
+    idx = _parse_selection_intent(text, len(candidates))
+    if idx is not None:
+        return candidates[idx]
     for candidate in candidates:
-        if candidate.get("name", "").casefold() in cleaned or cleaned in candidate.get("name", "").casefold():
+        name = candidate.get("name", "").casefold()
+        if name and (name in cleaned or cleaned in name):
             return candidate
     return None
 
@@ -388,18 +531,20 @@ def _select_pending_spotify(
     tracks: list[dict[str, Any]] | None,
     created_at: float,
 ) -> dict[str, Any] | None:
-    """Resolve a short-lived Spotify choice by number, ordinal, or title."""
+    """Resolve a short-lived Spotify choice by number, word, ordinal, or title."""
     if not tracks or time.monotonic() - created_at > 20:
         return None
-    cleaned = " ".join(text.casefold().split()).strip(" .!?")
-    ordinal_words = {"first": 0, "one": 0, "second": 1, "two": 1, "third": 2, "three": 2, "fourth": 3, "four": 3}
-    match = re.fullmatch(r"(?:number\s+)?(\d+)", cleaned)
-    index = int(match.group(1)) - 1 if match else ordinal_words.get(cleaned)
-    if index is not None and 0 <= index < len(tracks):
-        return tracks[index]
+    idx = _parse_selection_intent(text, len(tracks))
+    if idx is not None:
+        return tracks[idx]
+
+    cleaned = " ".join(text.casefold().split()).strip(" .!?\"'")
+    stripped = re.sub(r"^(?:play|listen\s+to)\s+", "", cleaned, flags=re.IGNORECASE).strip()
     for track in tracks:
-        name = str(track.get("name", "")).casefold()
-        if cleaned and (cleaned == name or cleaned in name):
+        name = str(track.get("name", "")).casefold().strip()
+        if not name:
+            continue
+        if cleaned == name or stripped == name or (cleaned and cleaned in name) or (stripped and stripped in name):
             return track
     return None
 
@@ -421,29 +566,46 @@ def _youtube_results_message(results: list[dict[str, Any]]) -> str:
     """Format numbered YouTube choices while retaining their links internally."""
     lines = ["I found these YouTube videos:"]
     lines.extend(f"{index}. {video['title']} ({video['url']})" for index, video in enumerate(results, 1))
-    lines.append("Say the title or say play YouTube video for the first result.")
+    lines.append("Which one would you like? Say 1, 2, 3, first, or the title.")
     return "\n".join(lines)
 
 
+def _select_pending_drive(text: str, drives: list[str]) -> str | None:
+    """Resolve a drive selection (e.g. 'C', 'C drive', 'the first one')."""
+    cleaned = " ".join(text.casefold().split()).strip(" .!?")
+    for drive in drives:
+        if cleaned == drive.lower() or f"{drive.lower()} drive" in cleaned or f"{drive.lower()}:" in cleaned:
+            return drive
+    idx = _parse_selection_intent(text, len(drives))
+    if idx is not None:
+        return drives[idx]
+    return None
+
+
 def _select_youtube_result(text: str, results: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Select a prior result by explicit playback request or exact title."""
+    """Select a prior result by number, word, ordinal, title, or playback request."""
     if not results:
         return None
-    lower_text = text.casefold()
+    idx = _parse_selection_intent(text, len(results))
+    if idx is not None:
+        return results[idx]
+
+    # Exact or partial video title matching fallback
+    cleaned = " ".join(text.casefold().split()).strip(" .!?\"'")
+    stripped = re.sub(r"^(?:play|watch|open|listen\s+to)\s+", "", cleaned, flags=re.IGNORECASE).strip()
     for video in results:
         title = video.get("title", "").casefold().strip()
-        if title and (title == lower_text.strip() or title in lower_text) and (
-            re.search(r"\b(play|watch|open)\b", text, re.IGNORECASE) or title == lower_text.strip()
-        ):
+        if not title:
+            continue
+        if title == cleaned or title == stripped:
             return video
-    if not re.search(r"\b(play|watch|open)\b", text, re.IGNORECASE):
-        return None
-    match = re.search(r"\b(?:play|watch|open)\s+(?:result\s+)?([1-9])\b", lower_text)
-    if match:
-        index = int(match.group(1)) - 1
-        if index < len(results):
-            return results[index]
+        if stripped and (stripped in title or title in stripped):
+            return video
+        if cleaned in title or title in cleaned:
+            return video
+
     return None
+
 
 
 def _duration_timings(timings: dict[str, float]) -> dict[str, float]:

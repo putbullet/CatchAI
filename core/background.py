@@ -27,6 +27,7 @@ class CatchBackgroundWorker(QObject):
     result_ready = Signal(object)
     failed = Signal(str)
     finished = Signal()
+    exit_requested = Signal(str)
 
     def __init__(self, device: int | None = None) -> None:
         super().__init__()
@@ -75,12 +76,20 @@ class CatchBackgroundWorker(QObject):
             self.user_text.emit(result["transcript"])
         if assistant_result.get("message"):
             self.assistant_text.emit(assistant_result["message"])
+
+        # Check for explicit exit command
+        if assistant_result.get("type") == "exit":
+            self.exit_requested.emit(assistant_result.get("message", "Goodbye!"))
+            self.stop()
+            return
+
         if assistant_result.get("tool_result", {}).get("image_path"):
             self.result_ready.emit({"result": result, "state": "waiting_for_wake", "woke": True})
             return
-        elif result.get("error"):
+        elif result.get("error") and result.get("error") != "No speech was detected":
             self.assistant_text.emit(f"Error: {result['error']}")
         self.result_ready.emit({"result": result, "state": "waiting_for_wake", "woke": True})
+
 
     @Slot()
     def stop(self) -> None:

@@ -41,7 +41,7 @@ from tools.system import (
 from tools.images import show_animal_image
 from tools.web import google_search, open_url
 from tools.weather import get_weather
-from tools.windows import close_application, open_application
+from tools.windows import close_all_applications, close_application, open_application
 
 
 class PermissionLevel(StrEnum):
@@ -142,6 +142,10 @@ class AnimalArgs(BaseModel):
     animal: str
 
 
+class CloseAllArgs(BaseModel):
+    confirm: bool = False
+
+
 class NoArgs(BaseModel):
     """Argument schema for tools without parameters."""
 
@@ -220,6 +224,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolDefinition("open_folder", "Open an allowlisted Windows folder", OpenFolderArgs, open_folder, PermissionLevel.SAFE_ACTION))
     registry.register(ToolDefinition("open_application", "Open a discovered application", ApplicationArgs, open_application, PermissionLevel.SAFE_ACTION))
     registry.register(ToolDefinition("close_application", "Close a discovered application", ApplicationArgs, close_application, PermissionLevel.SAFE_ACTION))
+    registry.register(ToolDefinition("close_all_applications", "Close all opened applications after confirmation", CloseAllArgs, close_all_applications, PermissionLevel.DESTRUCTIVE_ACTION))
     registry.register(ToolDefinition("google_search", "Open a Google search in the default browser", GoogleSearchArgs, google_search, PermissionLevel.SAFE_ACTION))
     registry.register(ToolDefinition("open_url", "Open a validated website in the default browser", OpenUrlArgs, open_url, PermissionLevel.SAFE_ACTION))
     registry.register(ToolDefinition("get_weather", "Get current weather using the profile location or requested city", WeatherArgs, get_weather, PermissionLevel.READ_ONLY))

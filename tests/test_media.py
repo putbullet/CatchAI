@@ -119,13 +119,15 @@ def test_spotify_play_surfaces_provider_exceptions(monkeypatch) -> None:
     assert "Spotify playback failed" in result["error"]
 
 
-def test_youtube_search_requires_environment_key(monkeypatch) -> None:
+def test_youtube_search_requires_environment_key(monkeypatch, tmp_path) -> None:
     monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
     result = youtube_search("Python")
 
     assert result["success"] is False
     assert "not configured" in result["error"]
+
 
 
 def test_youtube_search_reads_persistent_local_secret(monkeypatch, tmp_path) -> None:

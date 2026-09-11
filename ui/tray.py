@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QObject, QThread, Qt
+from PySide6.QtCore import QObject, QThread, QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+
 
 from core.state import CatchState
 from core.background import CatchBackgroundWorker
@@ -86,9 +87,18 @@ class CatchTray(QObject):
         self.worker.assistant_text.connect(self._show_assistant_text)
         self.worker.result_ready.connect(self._show_result)
         self.worker.failed.connect(self._show_error)
+        self.worker.exit_requested.connect(self._handle_exit_requested)
         self.worker.finished.connect(self.worker_thread.quit)
         self.worker_thread.finished.connect(self._clear_backend)
         self.worker_thread.start()
+
+    def _handle_exit_requested(self, message: str) -> None:
+        """Display a farewell message and trigger a graceful exit after a brief pause."""
+        self._response_visible = True
+        self.floating.set_message(f"Catch: {message}")
+        # Give the user a moment to see the farewell message before closing the window
+        QTimer.singleShot(1200, self.exit_application)
+
 
     def _show_result(self, result: dict) -> None:
         """Surface a completed backend cycle through the tray notification."""

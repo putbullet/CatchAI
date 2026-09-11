@@ -30,6 +30,32 @@ class ApplicationRecord(TypedDict):
 
 _application_cache: dict[str, ApplicationRecord] | None = None
 _DENIED_PROCESS_NAMES = {"csrss.exe", "explorer.exe", "lsass.exe", "services.exe", "smss.exe", "system", "wininit.exe", "winlogon.exe"}
+_PROTECTED_PROCESS_NAMES = _DENIED_PROCESS_NAMES | {
+    "python.exe", "pythonw.exe", "catchai.exe", "ollama.exe", "ollama_app.exe",
+    "svchost.exe", "dwm.exe", "ctfmon.exe", "sihost.exe", "taskhostw.exe",
+    "shellexperiencehost.exe", "searchhost.exe", "startmenuexperiencehost.exe",
+    "conhost.exe", "cmd.exe", "powershell.exe", "pwsh.exe",
+}
+_LAUNCHED_APPLICATIONS: list[dict[str, Any]] = []
+
+
+def record_launched_application(name: str, executable: str, pid: int | None = None) -> None:
+    """Track an application launched through Catch in this session."""
+    _LAUNCHED_APPLICATIONS.append({
+        "name": name,
+        "executable": executable.casefold(),
+        "pid": pid,
+    })
+
+
+def get_launched_applications() -> list[dict[str, Any]]:
+    return list(_LAUNCHED_APPLICATIONS)
+
+
+def clear_launched_applications() -> None:
+    _LAUNCHED_APPLICATIONS.clear()
+
+
 _APPLICATION_ALIASES = {
     "vscode": "visualstudiocode",
     "vs code": "visual studio code",
@@ -299,12 +325,18 @@ def open_application(app_name: str) -> dict[str, object]:
 
     launch_path = Path(application["launch_path"])
     try:
+        proc = None
         if application.get("app_id"):
             os.startfile(f"shell:AppsFolder\\{application['app_id']}")
         elif launch_path.suffix.casefold() == ".lnk":
             os.startfile(str(launch_path))
         else:
-            subprocess.Popen([str(launch_path)], shell=False)
+            proc = subprocess.Popen([str(launch_path)], shell=False)
+        record_launched_application(
+            application["name"],
+            application["executable"],
+            proc.pid if proc else None,
+        )
     except (OSError, PermissionError) as error:
         return {"success": False, "application": application["name"], "error": str(error)}
     return {"success": True, "application": application["name"], "message": f"{application['name']} launched"}
@@ -316,7 +348,7 @@ def close_application(app_name: str) -> dict[str, object]:
     if application is None:
         return {"success": False, "application": app_name, "error": "Application was not found"}
     process_name = application["executable"].casefold()
-    if process_name in _DENIED_PROCESS_NAMES:
+    if process_name in _DENIED_PROCESS_NAMES or process_name in _PROTECTED_PROCESS_NAMES:
         return {"success": False, "application": application["name"], "error": "This system process cannot be closed"}
 
     matches = []
@@ -335,3 +367,60 @@ def close_application(app_name: str) -> dict[str, object]:
     except (psutil.NoSuchProcess, psutil.AccessDenied) as error:
         return {"success": False, "application": application["name"], "error": str(error)}
     return {"success": True, "application": application["name"], "message": f"{application['name']} closed", "instances": len(matches)}
+
+
+def close_all_applications(confirm: bool = False) -> dict[str, object]:
+    """Safely terminate session-launched or user-opened desktop applications with confirmation."""
+    if not confirm:
+        return {
+            "success": False,
+            "confirmation_required": True,
+            "message": "Are you sure you want to close all opened applications? Say yes to confirm or no to cancel.",
+        }
+
+    current_pid = os.getpid()
+    catch_pids = {current_pid}
+    try:
+        current_process = psutil.Process(current_pid)
+        catch_pids.update(p.pid for p in current_process.children(recursive=True))
+        parent = current_process.parent()
+        if parent:
+            catch_pids.add(parent.pid)
+    except Exception:
+        pass
+
+    closed_names: set[str] = set()
+    total_closed = 0
+
+    launched_executables = {app["executable"].casefold() for app in _LAUNCHED_APPLICATIONS if app.get("executable")}
+    launched_pids = {app["pid"] for app in _LAUNCHED_APPLICATIONS if app.get("pid")}
+
+    for process in psutil.process_iter(["pid", "name"]):
+        try:
+            pid = process.info.get("pid")
+            name = (process.info.get("name") or "").casefold()
+            if not pid or pid in catch_pids:
+                continue
+            if name in _PROTECTED_PROCESS_NAMES or name in _DENIED_PROCESS_NAMES:
+                continue
+            should_close = False
+            if pid in launched_pids or name in launched_executables:
+                should_close = True
+
+            if should_close:
+                process.terminate()
+                closed_names.add(name)
+                total_closed += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    clear_launched_applications()
+
+    if total_closed == 0:
+        return {"success": True, "message": "No session applications were open to close.", "instances": 0}
+    return {
+        "success": True,
+        "message": f"Closed {total_closed} application instance(s).",
+        "closed_apps": sorted(closed_names),
+        "instances": total_closed,
+    }

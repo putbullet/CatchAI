@@ -16,7 +16,9 @@ from config import load_config
 
 class CatchFloatingWindow(QWidget):
     """Display the current Catch state using the provided WebM animations."""
-
+    _CHROME_HEIGHT = 130 + 4  # animation_canvas height + layout spacing
+    _MIN_WINDOW_HEIGHT = 190
+    _MAX_WINDOW_HEIGHT = 500
     _SIZE = 52
     _TEXT_FONT_FAMILY = "Segoe UI"
     _TEXT_FONT_SIZE = 11
@@ -108,13 +110,24 @@ class CatchFloatingWindow(QWidget):
         layout.addWidget(self.animation_canvas, 0, Qt.AlignCenter)
         layout.addWidget(self.transcript)
         self.set_state(CatchState.IDLE)
-
+        
+    def _text_block_height(self, message: str) -> int:
+        """Height needed to render message at the transcript's current width."""
+        width = self.transcript.width() or (self.width() - 18)
+        rect = self.transcript.fontMetrics().boundingRect(
+            0, 0, width, 0, Qt.TextWordWrap, message
+        )
+        return rect.height() + 10
+    
+    def _apply_height_for_text(self) -> None:
+        """Resize the window to fit the current transcript text plus chrome."""
+        needed = self._CHROME_HEIGHT + self._text_block_height(self.transcript.text())
+        self.setFixedHeight(max(self._MIN_WINDOW_HEIGHT, min(self._MAX_WINDOW_HEIGHT, needed)))
+        
     def set_message(self, message: str) -> None:
         """Show the complete response and grow the window for readable text."""
         self.transcript.setText(message)
-        self.transcript.adjustSize()
-        height = max(190, min(500, self.transcript.sizeHint().height() + 12))
-        self.setFixedHeight(height)
+        self._apply_height_for_text()
 
     def show_image(self, path: str, duration_ms: int | None = None) -> None:
         pixmap = QPixmap(path)
@@ -131,7 +144,7 @@ class CatchFloatingWindow(QWidget):
         if duration_ms is None:
             duration_ms = int(float(load_config().get("images", {}).get("display_seconds", 5)) * 1000)
         self._image_timer.start(duration_ms)
-        self.setFixedHeight(max(self.height(), 330))
+        self.setFixedHeight(max(self._MIN_WINDOW_HEIGHT, 330))
 
     def clear_image(self) -> None:
         self._image_timer.stop()
@@ -142,8 +155,8 @@ class CatchFloatingWindow(QWidget):
         if self._image_path is not None:
             self._image_path.unlink(missing_ok=True)
             self._image_path = None
-        self.setFixedHeight(max(190, self.transcript.sizeHint().height() + 70))
-
+        self._apply_height_for_text()
+        
     def resizeEvent(self, event) -> None:
         """Keep transient images anchored to the animation widget."""
         super().resizeEvent(event)

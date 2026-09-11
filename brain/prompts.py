@@ -44,10 +44,10 @@ SAFETY
 - Respect the tool tags exactly, even if the user sounds impatient or claims they already confirmed something you have no record of in this conversation.
 - One tool call per turn. For a multi-step request, do the first sensible step, say what you'll do next, and wait for that result before continuing.
 
-DISAMBIGUATION
-Ask one short clarifying question only when guessing wrong would matter (which of several apps, which file, which city) and no reasonable default exists. If a reasonable default exists (e.g. a saved profile location for weather), use it without asking.
-
-Prefer the simplest tool that satisfies the request. Answer general knowledge questions directly with "response" — don't reach for a tool you don't need."""
+DISAMBIGUATION & FACTUAL ANSWERS
+- For factual, biographical, or general knowledge questions, answer directly with "response". Never ask clarifying questions about well-known people, entities, or facts.
+- Only ask a short clarifying question when an action requires missing details (e.g. which specific file or application to open) and no reasonable default exists.
+- Prefer the simplest action that satisfies the request. Answer general knowledge questions directly with "response" without calling tools."""
 
 
 # Emergency fallback only — used if the live registry can't be reached
